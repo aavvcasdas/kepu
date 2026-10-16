@@ -12,6 +12,19 @@
 直接双击 HTML 即可在浏览器里打开：CSS、SVG 与脚本全部内联，离线可用。
 每页的图都可以用鼠标或方向键操作，卡片里会实时给出读数。
 
+## 视频版
+
+用 [jianying-editor-skill](https://github.com/luoluoluo22/jianying-editor-skill) 的
+「网页动效转视频」路径，把页面动作录成 1920×1080 视频素材，并生成剪映草稿：
+
+| 成片 | 视频 | 剪映草稿 | 字幕 |
+| --- | --- | --- | --- |
+| 薄肌测试台 · 25.97 s | [`pages/thin-muscle/video/thin-muscle-demo.mp4`](pages/thin-muscle/video/thin-muscle-demo.mp4) | [`jianying-draft.zip`](pages/thin-muscle/video/jianying-draft.zip) | [`captions.srt`](pages/thin-muscle/video/captions.srt) |
+
+录制版页面（`node build.mjs --record` 生成）按固定时间轴自播，播完用
+`window.animationFinished` 给 skill 的 `scripts/web_recorder.py` 发信号收尾。
+做法与复现命令见 [`pages/thin-muscle/video/README.md`](pages/thin-muscle/video/README.md)。
+
 ## 重新构建
 
 ```bash

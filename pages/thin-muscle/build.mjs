@@ -7,7 +7,7 @@
 //   面板两枚旋钮分别改皮褶厚度与肌肉高度；皮褶代进同一个截面模型得到腰围。
 // 尺度：1 世界单位 = 1 毫米（模型是实物大小），UNIT = 3.4 单位/厘米。
 // node build.mjs [--light] [--audit]
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as k from "../../anatomy/kit/iso-kit.mjs";
@@ -17,6 +17,7 @@ import { kitScript } from "../../anatomy/scripts/inline-kit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const THEME = process.argv.includes("--light") ? "light" : "dark";
+const RECORD = process.argv.includes("--record");   // 录制版：1920×1080 演播布局 + 自动时间轴
 
 const W = 620;
 const H = 452;
@@ -472,6 +473,49 @@ const svg = k.figureSvg({
   body: [...back, ...layer],
 });
 
+/* ── 录制尾脚本模板（build 期注入时间轴） ──────────────────────── */
+const recTail = `
+/* ── 录制模式：按固定时间轴自播，播完给 web_recorder 发 animationFinished ── */
+const REC_CLOCK = { duration: __DURATION__, signal: __SIGNAL__, keys: __KEYS__, scenes: __SCENES__ };
+const recEase = (u) => u * u * (3 - 2 * u);
+function recValue(series, t) {
+  if (t <= series[0][0]) return series[0][1];
+  for (let index = 1; index < series.length; index++) {
+    const [t0, v0] = series[index - 1];
+    const [t1, v1] = series[index];
+    if (t <= t1) {
+      const span = t1 - t0 || 1;
+      return v0 + (v1 - v0) * recEase(Math.max(0, Math.min(1, (t - t0) / span)));
+    }
+  }
+  return series[series.length - 1][1];
+}
+const recTitle = document.querySelector("[data-rec-title]");
+const recPoints = document.querySelector("[data-rec-points]");
+const recCaption = document.querySelector("[data-rec-caption]");
+const recProgress = document.querySelector("[data-rec-progress]");
+let recScene = null, recStart = 0, recSignalled = false;
+function recFrame(now) {
+  if (!recStart) recStart = now;
+  const t = (now - recStart) / 1000;
+  fat = fatT = recValue(REC_CLOCK.keys.fat, t);
+  mus = musT = recValue(REC_CLOCK.keys.mus, t);
+  draw();
+  const scene = REC_CLOCK.scenes.find((item) => t >= item.from && t < item.to) || REC_CLOCK.scenes[REC_CLOCK.scenes.length - 1];
+  if (scene !== recScene) {
+    recScene = scene;
+    recTitle.textContent = scene.title;
+    recPoints.innerHTML = scene.points.map((point) => "<li>" + point + "</li>").join("");
+    recCaption.textContent = scene.caption;
+  }
+  if (recProgress) recProgress.style.width = Math.min(100, (t / REC_CLOCK.duration) * 100).toFixed(2) + "%";
+  if (!recSignalled && t >= REC_CLOCK.signal) { recSignalled = true; window.animationFinished = true; }
+  if (t >= REC_CLOCK.duration) { if (recProgress) recProgress.style.width = "100%"; return; }
+  requestAnimationFrame(recFrame);
+}
+requestAnimationFrame(recFrame);
+`;
+
 /* ── 页面里的模型（与 build 同一份公式） ─────────────────────────── */
 const DATA = {
   P, UNIT, FAT0, MUS0, FAT_MIN, FAT_MAX, F_PLINTH_H, PLAN0, PLAN_SKIN, SKIN_T,
@@ -508,6 +552,7 @@ const lobesHost = svg.querySelector('[data-part="lobes"]');
 const probeHost = svg.querySelector('[data-part="probe"]');
 const knobs = D.KNOBS.map((_, index) => svg.querySelector('[data-part="knob-' + index + '"]'));
 const still = matchMedia("(prefers-reduced-motion: reduce)");
+const REC = ${RECORD};   // 录制版：不巡演、不接管指针，交给时间轴
 
 function lobePoly(mus, cy) {
   const h = moundUnits(mus), base = D.F_PLINTH_H, top = base + h, hw = D.LOBE_HW;
@@ -601,14 +646,14 @@ const steer = (f, m) => {
   fatT = clamp(f, D.FAT_MIN, D.FAT_MAX);
   musT = clamp(m, 0, 1);
   clearTimeout(idle);
-  idle = setTimeout(() => { touring = !still.matches; clock = 0; run(); }, 4000);
+  idle = setTimeout(() => { touring = !still.matches && !REC; clock = 0; run(); }, 4000);
   run();
 };
-new IntersectionObserver((entries) => {
+if (!REC) new IntersectionObserver((entries) => {
   visible = entries[entries.length - 1].isIntersecting;
   if (visible) run();
 }, { rootMargin: "120px 0px" }).observe(stage);
-if (still.matches) touring = false;
+if (still.matches || REC) touring = false;
 stage.addEventListener("pointermove", (event) => {
   const box = svg.getBoundingClientRect();
   const fx = clamp((event.clientX - box.left) / box.width, 0, 1);
@@ -628,6 +673,50 @@ stage.addEventListener("keydown", (event) => {
 });
 draw();
 `;
+
+
+/* ── 录制时间轴：页面自播与 SRT 共用同一份数据 ─────────────────────── */
+const REC_DURATION = 25.5, REC_SIGNAL = 24.6;
+const REC_KEYS = {
+  fat: [[0, 11.5], [3, 9.0], [5, 9.0], [7.5, 18], [8.2, 18], [10.4, 3.2], [12.5, 3.2], [13.5, 6.5],
+    [17.5, 6.5], [18.6, 12], [19.8, 6.5], [21.8, 6.5], [22.6, 8.0], [REC_DURATION, 8.0]],
+  mus: [[0, 0.55], [5, 0.55], [10.8, 0.55], [12.2, 0], [13.0, 0], [17.0, 1.0], [REC_DURATION, 1.0]],
+};
+const REC_SCENES = [
+  {
+    from: 0, to: 5.0, title: "皮褶卡尺夹的是两层",
+    points: ["皮肤约 <b>1.5 毫米</b>，几乎不随减脂变化", "下面是皮下脂肪，腰腹常见 <b>3–18 毫米</b>", "两片颚之间的净空 = 皮褶毫米数"],
+    caption: "皮下脂肪只有几毫米厚，腰围的量级却是厘米——差别就藏在这一层里。",
+  },
+  {
+    from: 5.0, to: 11.0, title: "脂肪薄 1 毫米，腰围少 6.3 毫米",
+    points: ["体脂 25% → 15%：<b>14–20 毫米 → 5–9 毫米</b>", "椭圆截面按周长算：每 1 毫米 ≈ <b>6.3 毫米</b>腰围", "先动的是腰围，不是秤"],
+    caption: "两侧各薄 6 毫米，腰围就少约 3.8 厘米：减脂前期，腰围比体重先动。",
+  },
+  {
+    from: 11.0, to: 17.0, title: "形状是天生的，厚度是练出来的",
+    points: ["肌肉的分块与起止点由骨架决定", "探针量的是竖脊肌脊顶高度，<b>2.5–6.5 厘米</b>", "脂肪薄到几毫米时，决定线条的是肌肉"],
+    caption: "起点终点改不了，厚度能改：抗阻训练几个月，肌肉横截面能涨 10%–30%。",
+  },
+  {
+    from: 17.0, to: 21.8, title: "腰围只跟着脂肪走",
+    points: ["同样重量，肌肉体积约为脂肪的 <b>0.8 倍</b>", "肌肉长在该长的地方，不会糊掉腰线", "「局部减脂」：旋钮会告诉你不行"],
+    caption: "把皮褶拧回去，竖脊肌的高度一点没动；把肌肉拉满，腰围几乎照旧。",
+  },
+  {
+    from: 21.8, to: REC_DURATION, title: "腰围是结果，不是原因",
+    points: ["脂肪：<b>毫米级</b>变化，按月动（靠吃）", "肌肉：<b>厘米级</b>变化，按年动（靠练）", "两边都做，再按结果微调"],
+    caption: "腰围是结果，皮褶与肌肉厚度是原因。原因可以分开调，结果只能一起等。",
+  },
+];
+const srtTime = (seconds) => {
+  const ms = Math.round(seconds * 1000);
+  const hh = String(Math.floor(ms / 3600000)).padStart(2, "0");
+  const mm = String(Math.floor(ms / 60000) % 60).padStart(2, "0");
+  const ss = String(Math.floor(ms / 1000) % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss},${String(ms % 1000).padStart(3, "0")}`;
+};
+const srtText = REC_SCENES.map((scene, index) => `${index + 1}\n${srtTime(scene.from)} --> ${srtTime(scene.to)}\n${scene.caption.replace(/<[^>]+>/g, "")}\n`).join("\n");
 
 /* ── 页面 ─────────────────────────────────────────────────────────── */
 const PAGE_CSS = `
@@ -662,6 +751,50 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Hiragino S
   .iso-article th,.iso-article td{padding:7px 6px}
 }
 `;
+
+
+const RECORD_CSS = RECORD ? `
+/* ── 录制版：1920×1080 演播布局（左侧知识栏 + 右侧主舞台 + 底部字幕） ── */
+body>.iso-page{margin:0;width:1920px;max-width:none;height:1080px;overflow:hidden;position:relative;
+  display:grid;grid-template-columns:660px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page)}
+body>.iso-page>.iso-page.rec{display:contents}
+.rec-left{position:relative;padding:92px 56px 132px 80px;border-right:1px solid var(--anatomy-faint)}
+.rec-kicker{font-family:var(--anatomy-mono);font-size:15px;letter-spacing:.22em;color:var(--anatomy-muted);margin:0 0 24px}
+.rec-kicker b{color:var(--anatomy-text);font-weight:400}
+.rec-title{font-size:44px;line-height:1.32;color:var(--anatomy-strong);margin:0 0 32px;font-weight:600;letter-spacing:.5px}
+.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:20px}
+.rec-points li{position:relative;padding-left:28px;font-size:22px;line-height:1.7;color:var(--anatomy-text)}
+.rec-points li::before{content:"";position:absolute;left:0;top:17px;width:12px;height:1.5px;background:var(--anatomy-lo)}
+.rec-points b{color:var(--anatomy-strong);font-weight:600}
+.rec-readout{position:absolute;left:80px;right:56px;bottom:44px;padding-top:22px;border-top:1px solid var(--anatomy-faint);
+  font-family:var(--anatomy-mono);font-size:24px;color:var(--anatomy-strong);font-variant-numeric:tabular-nums;letter-spacing:.2px}
+.rec-stage{display:flex;align-items:center;justify-content:center;padding:36px 64px 20px 40px}
+.rec-stage .iso-figure{margin:0;width:100%}
+.rec-stage .iso-plate{padding:34px 22px;box-shadow:0 0 0 1px var(--anatomy-lo)}
+.rec-stage .iso-svg{width:100%;height:748px}
+.rec-caption{grid-column:1 / -1;padding:22px 100px 48px;text-align:center}
+.rec-caption span{display:inline-block;font-size:36px;line-height:1.5;color:var(--anatomy-strong);max-width:1600px;font-weight:500}
+.rec-progress{position:absolute;left:0;right:0;bottom:0;height:5px;background:var(--anatomy-faint)}
+.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-lit);opacity:.55}
+.rec-hide{display:none}
+` : "";
+const recShell = (stage) => `
+<main class="iso-page rec">
+  <section class="rec-left">
+    <p class="rec-kicker">ANATOMY · 图 1 <b>薄肌测试台</b></p>
+    <h2 class="rec-title" data-rec-title>${REC_SCENES[0].title}</h2>
+    <ul class="rec-points" data-rec-points>${REC_SCENES[0].points.map((point) => `<li>${point}</li>`).join("")}</ul>
+    <div class="rec-readout" data-readout>腰围 ${waistCm(FAT0).toFixed(1)} cm · 皮褶 ${skinfoldMm(FAT0).toFixed(1)} mm · 竖脊肌 ${erectorCm(MUS0).toFixed(1)} cm</div>
+  </section>
+  <section class="rec-stage">
+    <figure class="iso-figure"><div class="iso-plate">
+      <div class="iso-plate-corners" aria-hidden="true"><span class="iso-plate-corner" data-corner="fig">图 1</span><span class="iso-plate-corner" data-corner="title">薄肌测试台</span></div>
+      ${stage}
+    </div></figure>
+  </section>
+  <div class="rec-caption"><span data-rec-caption>${REC_SCENES[0].caption}</span></div>
+  <div class="rec-progress"><i data-rec-progress></i></div>
+</main>`;
 
 const head = `
 <style>${PAGE_CSS}</style>
@@ -726,7 +859,8 @@ const rest = `
 </footer>
 `;
 
-const figure = k.plateHtml({
+const stageHtml = `<div class="iso-stage" tabindex="0" role="slider" aria-label="薄肌测试台：左右方向键改皮褶厚度，上下方向键改肌肉高度" aria-valuemin="${FAT_MIN}" aria-valuemax="${FAT_MAX}"><span data-gaze aria-hidden="true" style="display:none"></span>${svg}</div>`;
+const figure = RECORD ? recShell(stageHtml) : k.plateHtml({
   fig: "图 1",
   title: "薄肌测试台",
   hint: "鼠标移动或方向键：左右调皮褶，上下调肌肉",
@@ -746,15 +880,27 @@ const latheSource = readFileSync(join(HERE, "..", "..", "anatomy", "kit", "lathe
   .replace(/^export /gm, "");
 const latheScript = `const G = (() => {${latheSource}\nreturn { viewOf, scaleOf, frameAlong, frameOf, pointOf, disc, ringBand, sphereOf, prismOf, solidOf, circleOf, arcOf, stepsFor, dot3, add3, sub3, mul3, unit3, cross3, len3, lightOf, toneOf, radialOf };})();\n`;
 
+const REC_TAIL = RECORD
+  ? recTail.replace("__DURATION__", String(REC_DURATION)).replace("__SIGNAL__", String(REC_SIGNAL))
+      .replace("__KEYS__", JSON.stringify(REC_KEYS)).replace("__SCENES__", JSON.stringify(REC_SCENES))
+  : "";
 const html = k.pageHtml({
-  title: "薄肌：为什么有人看着瘦，力量却一点不小",
+  title: RECORD ? "薄肌测试台 · 演示视频" : "薄肌：为什么有人看着瘦，力量却一点不小",
   theme: THEME,
-  body: `${head}${figure}${rest}`,
-  script: kitScript() + latheScript + live,
-  width: 760,
-}).replace('<html lang="en">', '<html lang="zh-CN">');
+  body: RECORD ? figure : `${head}${figure}${rest}`,
+  script: kitScript() + latheScript + live + REC_TAIL,
+  width: RECORD ? 1920 : 760,
+}).replace('<html lang="en">', '<html lang="zh-CN">')
+  .replace("<style>", `<style>${RECORD_CSS}</style><style>`);
 
-const file = THEME === "light" ? "thin-muscle-light.html" : "thin-muscle.html";
+if (RECORD) {
+  mkdirSync(join(HERE, "video"), { recursive: true });
+  writeFileSync(join(HERE, "video", "captions.srt"), srtText);
+  console.log("wrote video/captions.srt", REC_SCENES.length, "条字幕");
+}
+const file = RECORD
+  ? (THEME === "light" ? "thin-muscle-record-light.html" : "thin-muscle-record.html")
+  : (THEME === "light" ? "thin-muscle-light.html" : "thin-muscle.html");
 writeFileSync(join(HERE, file), html);
 A.auditOrExit(R, P, {});
 console.log("wrote", file, `${(html.length / 1024).toFixed(0)} KB`);
