@@ -17,6 +17,14 @@ FONT_DIR=/tmp/fonts
 FONT_CONF=/tmp/csfonts
 VENV=/tmp/pyenv
 
+SKILL_DIR="${JY_SKILL_ROOT:-/home/user/jianying-skill}"
+
+echo "== 0/5 jianying-editor-skill =="
+if [ ! -d "$SKILL_DIR/scripts" ]; then
+  git clone --depth 1 -q https://github.com/luoluoluo22/jianying-editor-skill "$SKILL_DIR"
+fi
+echo "skill → $SKILL_DIR ($(git -C "$SKILL_DIR" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+
 echo "== 1/5 npm 依赖 =="
 cd "$TOOLS"
 if [ ! -x node_modules/@ffmpeg-installer/linux-x64/ffmpeg ]; then

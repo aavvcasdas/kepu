@@ -475,8 +475,12 @@ const svg = k.figureSvg({
 
 /* ── 录制尾脚本模板（build 期注入时间轴） ──────────────────────── */
 const recTail = `
-/* ── 录制模式：按固定时间轴自播，播完给 web_recorder 发 animationFinished ── */
-const REC_CLOCK = { duration: __DURATION__, signal: __SIGNAL__, keys: __KEYS__, scenes: __SCENES__ };
+/* ── 录制模式：拆解动画 ────────────────────────────────────────────
+   1. 零件组沿世界坐标 +z 抬起（translateAlong 把三维位移换算成屏幕位移）；
+   2. 抬起时按抬起量升序重排 DOM，抬得高的画在上面，避免互相穿插；
+   3. 每个零件跟一个标注（位置每帧按 getBBox + getScreenCTM 换算），数字取自同一个模型；
+   4. 时间轴播完在 signal 时刻置 window.animationFinished，交给 web_recorder 收尾。 */
+const REC_CLOCK = { duration: __DURATION__, signal: __SIGNAL__, keys: __KEYS__, lifts: __LIFTS__, scenes: __SCENES__, parts: __PARTS__ };
 const recEase = (u) => u * u * (3 - 2 * u);
 function recValue(series, t) {
   if (t <= series[0][0]) return series[0][1];
@@ -494,13 +498,101 @@ const recTitle = document.querySelector("[data-rec-title]");
 const recPoints = document.querySelector("[data-rec-points]");
 const recCaption = document.querySelector("[data-rec-caption]");
 const recProgress = document.querySelector("[data-rec-progress]");
+const recStage = document.querySelector(".rec-stage");
+const recSvg = recStage.querySelector("svg");
+
+/* 标注文案：全部来自页面里那份模型（和正文读数同源） */
+const REC_TAG_TEXT = {
+  caliper: () => "卡尺 · 卡口净空 " + skinfoldMm(fat).toFixed(1) + " mm",
+  probe: () => "探针 · 竖脊肌 " + (moundUnits(mus) / 10).toFixed(1) + " cm",
+  skin: () => "皮肤 ≈ 1.5 mm（不变）",
+  pad: () => "皮下脂肪 " + Math.max(0, skinfoldMm(fat) - 1.5).toFixed(1) + " mm",
+  lobes: () => "竖脊肌脊顶 " + (moundUnits(mus) / 10).toFixed(1) + " cm",
+};
+const recParts = REC_CLOCK.parts.map((part) => Object.assign({}, part, { lift: 0, el: recSvg.querySelector(part.sel) }));
+const recLayer = recParts[0].el.parentElement;
+const recOrder0 = [...recLayer.children];
+/* 标注的栏位：左侧栏放卡尺/皮肤/脂肪，右侧栏放探针/肌肉 */
+const REC_SLOTS = { caliper: ["left", 0], skin: ["left", 1], pad: ["left", 2], probe: ["right", 0], lobes: ["right", 2] };
+const recTags = {}, recLeaders = {};
+const recLeaderLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+recLeaderLayer.setAttribute("class", "rec-leaders");
+recSvg.appendChild(recLeaderLayer);
+for (const part of recParts) {
+  if (!part.label) continue;
+  const slot = REC_SLOTS[part.key] || ["left", 0];
+  const tag = document.createElement("div");
+  tag.className = "rec-tag";
+  tag.dataset.side = slot[0];
+  tag.dataset.lane = String(slot[1]);
+  tag.innerHTML = '<span class="rec-tag-text"></span>';
+  recStage.appendChild(tag);
+  recTags[part.key] = tag;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  dot.setAttribute("r", "3");
+  dot.setAttribute("opacity", "0");
+  path.setAttribute("opacity", "0");
+  recLeaderLayer.append(path, dot);
+  recLeaders[part.key] = { path, dot };
+}
+/* 屏幕像素 ↔ SVG 用户坐标（viewBox 的原点被抬到 -168，必须走 CTM 换算） */
+const recToScreen = (el, x, y) => { const pt = recSvg.createSVGPoint(); pt.x = x; pt.y = y; return pt.matrixTransform(el.getScreenCTM()); };
+const recToSvg = (x, y) => { const pt = recSvg.createSVGPoint(); pt.x = x; pt.y = y; return pt.matrixTransform(recSvg.getScreenCTM().inverse()); };
+const recPt = recSvg.createSVGPoint();
+let recBox = null, recOrderKey = "assembled";
+function recOrderNow() {
+  const lifted = recParts.some((part) => part.lift > 0.02);
+  const key = lifted ? recParts.slice().sort((a, b) => a.lift - b.lift).map((part) => part.key).join(",") : "assembled";
+  if (key === recOrderKey) return;
+  recOrderKey = key;
+  const order = lifted
+    ? [...recOrder0.filter((node) => !recParts.some((part) => part.el === node)),
+       ...recParts.slice().sort((a, b) => a.lift - b.lift).map((part) => part.el)]
+    : recOrder0;
+  recLayer.append(...order);
+}
+function recUpdateTag(part) {
+  const tag = recTags[part.key];
+  if (!tag) return;
+  const value = REC_TAG_TEXT[part.key] ? REC_TAG_TEXT[part.key]() : part.label;
+  const text = tag.firstElementChild;
+  if (text.textContent !== value) text.textContent = value;
+  const show = Math.max(0, Math.min(1, (part.lift / part.amp) * 1.8 - 0.25));
+  tag.style.opacity = show.toFixed(2);
+  const leader = recLeaders[part.key];
+  if (!leader) return;
+  const box = part.el.getBBox();
+  const tip = recToScreen(part.el, box.x + box.width / 2, box.y);
+  const rect = tag.getBoundingClientRect();
+  const isRight = tag.dataset.side === "right";
+  const anchor = recToSvg(isRight ? rect.right : rect.left, rect.top + rect.height / 2);
+  const target = recToSvg(tip.x, tip.y);
+  // 竖向段走到标注栏外侧，避免穿过同侧其它标注框
+  const elbow = anchor.x + (isRight ? 34 : -34);
+  const line = "M" + anchor.x.toFixed(1) + " " + anchor.y.toFixed(1)
+    + " L" + elbow.toFixed(1) + " " + anchor.y.toFixed(1)
+    + " L" + elbow.toFixed(1) + " " + target.y.toFixed(1)
+    + " L" + target.x.toFixed(1) + " " + target.y.toFixed(1);
+  leader.path.setAttribute("d", line);
+  leader.path.setAttribute("opacity", show.toFixed(2));
+  leader.dot.setAttribute("cx", target.x.toFixed(1));
+  leader.dot.setAttribute("cy", target.y.toFixed(1));
+  leader.dot.setAttribute("opacity", show.toFixed(2));
+}
 let recScene = null, recStart = 0, recSignalled = false;
 function recFrame(now) {
-  if (!recStart) recStart = now;
+  if (!recStart) { recStart = now; recBox = recStage.getBoundingClientRect(); }
   const t = (now - recStart) / 1000;
   fat = fatT = recValue(REC_CLOCK.keys.fat, t);
   mus = musT = recValue(REC_CLOCK.keys.mus, t);
   draw();
+  for (const part of recParts) {
+    part.lift = recValue(REC_CLOCK.lifts[part.key], t) * part.amp;
+    part.el.setAttribute("transform", translateAlong(P, [0, 0, part.lift]));   // 页面里 kit 是裸名
+    recUpdateTag(part);
+  }
+  recOrderNow();
   const scene = REC_CLOCK.scenes.find((item) => t >= item.from && t < item.to) || REC_CLOCK.scenes[REC_CLOCK.scenes.length - 1];
   if (scene !== recScene) {
     recScene = scene;
@@ -676,37 +768,67 @@ draw();
 
 
 /* ── 录制时间轴：页面自播与 SRT 共用同一份数据 ─────────────────────── */
-const REC_DURATION = 25.5, REC_SIGNAL = 24.6;
+const REC_DURATION = 27.4, REC_SIGNAL = 26.1;
 const REC_KEYS = {
-  fat: [[0, 11.5], [3, 9.0], [5, 9.0], [7.5, 18], [8.2, 18], [10.4, 3.2], [12.5, 3.2], [13.5, 6.5],
-    [17.5, 6.5], [18.6, 12], [19.8, 6.5], [21.8, 6.5], [22.6, 8.0], [REC_DURATION, 8.0]],
-  mus: [[0, 0.55], [5, 0.55], [10.8, 0.55], [12.2, 0], [13.0, 0], [17.0, 1.0], [REC_DURATION, 1.0]],
+  // 起点：皮褶 16.5 毫米（体脂偏高）；第 3 步把脂肪层取到 3.2 毫米；第 4 步把肌肉练厚
+  fat: [[0, 16.5], [11.8, 16.5], [16.6, 3.2], [REC_DURATION, 3.2]],
+  mus: [[0, 0.30], [16.8, 0.30], [20.6, 0.95], [REC_DURATION, 0.95]],
+};
+/* 拆解：零件沿 +z（世界坐标的竖直方向）抬起，amp 是抬起的最大高度（世界单位）。
+   sel 指向 build 时打好的 data-part 组，抬起靠 iso-kit 的 translateAlong 换算成屏幕位移。 */
+const REC_PARTS = [
+  { key: "caliper", sel: '[data-part="carriage"]', amp: 26, label: "卡尺" },
+  { key: "column", sel: '[data-part="column-high"]', amp: 26 },
+  { key: "needle", sel: '[data-part="needle"]', amp: 26 },
+  { key: "probe", sel: '[data-part="probe"]', amp: 17, label: "探针" },
+  { key: "skin", sel: '[data-part="fat-skin"]', amp: 50, label: "皮肤层" },
+  { key: "pad", sel: '[data-part="fat-pad"]', amp: 31, label: "皮下脂肪" },
+  { key: "lobes", sel: '[data-part="lobes"]', amp: 13, label: "竖脊肌" },
+];
+const REC_LIFTS = {
+  caliper: [[0, 0], [3.8, 0], [7.2, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  column: [[0, 0], [3.8, 0], [7.2, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  needle: [[0, 0], [3.8, 0], [7.2, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  probe: [[0, 0], [3.8, 0], [7.4, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  skin: [[0, 0], [7.4, 0], [11.6, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  pad: [[0, 0], [11.8, 0], [16.4, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
+  lobes: [[0, 0], [16.8, 0], [20.4, 1], [21.0, 1], [24.6, 0], [REC_DURATION, 0]],
 };
 const REC_SCENES = [
   {
-    from: 0, to: 5.0, title: "皮褶卡尺夹的是两层",
-    points: ["皮肤约 <b>1.5 毫米</b>，几乎不随减脂变化", "下面是皮下脂肪，腰腹常见 <b>3–18 毫米</b>", "两片颚之间的净空 = 皮褶毫米数"],
-    caption: "皮下脂肪只有几毫米厚，腰围的量级却是厘米——差别就藏在这一层里。",
+    from: 0, to: 3.8, title: "先看整机，再一层层拆开",
+    points: ["皮肤：约 <b>1.5 毫米</b>，几乎不变", "皮下脂肪：随减脂变薄", "竖脊肌：随训练变厚"],
+    caption: "这台测试台就是一层层量出来的：皮肤、皮下脂肪、竖脊肌。先看整机，再拆开。",
   },
   {
-    from: 5.0, to: 11.0, title: "脂肪薄 1 毫米，腰围少 6.3 毫米",
-    points: ["体脂 25% → 15%：<b>14–20 毫米 → 5–9 毫米</b>", "椭圆截面按周长算：每 1 毫米 ≈ <b>6.3 毫米</b>腰围", "先动的是腰围，不是秤"],
-    caption: "两侧各薄 6 毫米，腰围就少约 3.8 厘米：减脂前期，腰围比体重先动。",
+    from: 3.8, to: 7.4, title: "第 1 步：抬起卡尺",
+    points: ["卡口净空 = 皮褶毫米数", "夹住的是皮肤 + 皮下脂肪", "拆下它才能看见里面"],
+    caption: "第一步拆卡尺：它夹住的是两层——几乎不变的皮肤，和会变薄的皮下脂肪。",
   },
   {
-    from: 11.0, to: 17.0, title: "形状是天生的，厚度是练出来的",
-    points: ["肌肉的分块与起止点由骨架决定", "探针量的是竖脊肌脊顶高度，<b>2.5–6.5 厘米</b>", "脂肪薄到几毫米时，决定线条的是肌肉"],
-    caption: "起点终点改不了，厚度能改：抗阻训练几个月，肌肉横截面能涨 10%–30%。",
+    from: 7.4, to: 11.8, title: "第 2 步：掀开皮肤层",
+    points: ["皮肤约 <b>1.5 毫米</b>", "几乎不随减脂变化", "所以量到的其实是它下面的脂肪"],
+    caption: "皮肤只有约 1.5 毫米，而且几乎不随减脂变化——皮褶卡尺量到的主要是脂肪。",
   },
   {
-    from: 17.0, to: 21.8, title: "腰围只跟着脂肪走",
-    points: ["同样重量，肌肉体积约为脂肪的 <b>0.8 倍</b>", "肌肉长在该长的地方，不会糊掉腰线", "「局部减脂」：旋钮会告诉你不行"],
-    caption: "把皮褶拧回去，竖脊肌的高度一点没动；把肌肉拉满，腰围几乎照旧。",
+    from: 11.8, to: 16.8, title: "第 3 步：取下脂肪层",
+    points: ["皮褶 <b>16.5 → 3.2 毫米</b>", "每薄 1 毫米，腰围少约 <b>6.3 毫米</b>", "先动的是腰围，不是秤"],
+    caption: "脂肪层从 16.5 毫米一路取到 3.2 毫米：每薄 1 毫米，腰围就少约 6.3 毫米。",
   },
   {
-    from: 21.8, to: REC_DURATION, title: "腰围是结果，不是原因",
-    points: ["脂肪：<b>毫米级</b>变化，按月动（靠吃）", "肌肉：<b>厘米级</b>变化，按年动（靠练）", "两边都做，再按结果微调"],
-    caption: "腰围是结果，皮褶与肌肉厚度是原因。原因可以分开调，结果只能一起等。",
+    from: 16.8, to: 21.0, title: "第 4 步：让肌肉长起来",
+    points: ["分块与起止点由骨架决定", "厚度能练：<b>2.5 → 6.5 厘米</b>", "脂肪薄下去，线条才露出来"],
+    caption: "肌肉的分块改不了，厚度能改：竖脊肌脊顶从 2.5 厘米练到 6.5 厘米。",
+  },
+  {
+    from: 21.0, to: 24.6, title: "第 5 步：装回去",
+    points: ["皮肤、脂肪、卡尺、探针依次落位", "脂肪薄了，肌肉厚了", "腰围读数跟着降下来"],
+    caption: "装回去：皮肤、脂肪、卡尺依次落位，脂肪薄了、肌肉厚了。",
+  },
+  {
+    from: 24.6, to: REC_DURATION, title: "腰围是结果，不是原因",
+    points: ["脂肪：毫米级，按月动（靠吃）", "肌肉：厘米级，按年动（靠练）", "两边都做，再按结果微调"],
+    caption: "腰围是结果，皮褶与肌肉厚度才是原因。原因可以分开调，结果只能一起等。",
   },
 ];
 const srtTime = (seconds) => {
@@ -718,7 +840,78 @@ const srtTime = (seconds) => {
 };
 const srtText = REC_SCENES.map((scene, index) => `${index + 1}\n${srtTime(scene.from)} --> ${srtTime(scene.to)}\n${scene.caption.replace(/<[^>]+>/g, "")}\n`).join("\n");
 
-/* ── 页面 ─────────────────────────────────────────────────────────── */
+const DEFAULT_METRIC = `腰围 ${waistCm(FAT0).toFixed(1)} cm · 皮褶 ${skinfoldMm(FAT0).toFixed(1)} mm · 竖脊肌 ${erectorCm(MUS0).toFixed(1)} cm`;
+const recShell = (stage) => `
+<main class="iso-page rec">
+  <section class="rec-left">
+    <p class="rec-kicker">ANATOMY · 图 1 · <b>薄肌测试台</b></p>
+    <h2 class="rec-title" data-rec-title>${REC_SCENES[0].title}</h2>
+    <ul class="rec-points" data-rec-points>${REC_SCENES[0].points.map((point) => `<li>${point}</li>`).join("")}</ul>
+    <div class="rec-metric" data-readout>${DEFAULT_METRIC}</div>
+  </section>
+  <section class="rec-stage">
+    <figure class="iso-figure"><div class="iso-plate">
+      <div class="iso-plate-corners" aria-hidden="true"><span class="iso-plate-corner" data-corner="fig">图 1</span><span class="iso-plate-corner" data-corner="title">薄肌测试台</span></div>
+      ${stage}
+    </div></figure>
+  </section>
+  <div class="rec-caption"><span data-rec-caption>${REC_SCENES[0].caption}</span></div>
+  <div class="rec-progress"><i data-rec-progress></i></div>
+</main>`;
+
+const RECORD_CSS = RECORD ? `
+/* ── 录制版：1920×1080 演播布局 ────────────────────────────────────────
+   为什么这样排：
+   1. 深色主题缩到手机宽度时等距图只剩线条（灰度 2/255），所以录制版固定用项目自带的浅色主题，
+      并把墨色再加深两档、字号按「缩到 1/3 仍可读」来定；
+   2. 图的 SVG 比例是 620×452 ≈ 1.37，舞台盒子必须贴合这个比例，
+      否则 xMidYMid 居中会在左右各留一大块空白（上一版就是这么糊掉的）；
+   3. 左栏放标题 + 大号数据读数 + 要点，右栏放图，底部整条字幕。 */
+body>.iso-page{margin:0;width:1920px;max-width:none;height:1080px;overflow:hidden;position:relative;
+  display:grid;grid-template-columns:760px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page);
+  --anatomy-text:#3f3f43;--anatomy-strong:#111113;--anatomy-hi:#1b1b1e;
+  --anatomy-mid:#5b5b60;--anatomy-lo:#8c8c91;--anatomy-faint:#c6c6c9;
+  --anatomy-shade-0:#eaeae7;--anatomy-shade-1:#e5e5e2;--anatomy-shade-2:#dfdfdc;--anatomy-shade-3:#d9d9d6;
+  --anatomy-paper:#f8f8f5;--anatomy-face:#f2f2ef;--anatomy-top:#ffffff;
+  --anatomy-lit-top:#ffffff;--anatomy-lit-shade:#f5f5f2}
+body>.iso-page>.iso-page.rec{display:contents}
+.rec-left{position:relative;padding:84px 44px 76px 76px;border-right:1.5px solid var(--anatomy-faint)}
+.rec-kicker{font-family:var(--anatomy-mono);font-size:19px;letter-spacing:.28em;color:var(--anatomy-muted);margin:0 0 18px}
+.rec-kicker b{color:var(--anatomy-text);font-weight:400}
+.rec-title{font-size:50px;line-height:1.24;color:var(--anatomy-strong);margin:0 0 30px;font-weight:600;letter-spacing:.5px}
+.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:18px}
+.rec-points li{position:relative;padding-left:26px;font-size:25px;line-height:1.62;color:var(--anatomy-text)}
+.rec-points li::before{content:"";position:absolute;left:0;top:19px;width:14px;height:2px;background:var(--anatomy-mid)}
+.rec-points b{color:var(--anatomy-strong);font-weight:600}
+.rec-metric{position:absolute;left:76px;right:44px;bottom:52px;padding-top:22px;border-top:1.5px solid var(--anatomy-faint);
+  font-family:var(--anatomy-mono);font-size:27px;line-height:1.4;color:var(--anatomy-strong);white-space:nowrap;
+  font-variant-numeric:tabular-nums;letter-spacing:.2px}
+.rec-stage{position:relative;display:flex;align-items:center;justify-content:center;padding:34px 54px 26px 44px}
+.rec-stage .iso-figure{margin:0;width:100%}
+.rec-stage .iso-plate{padding:26px 28px;box-shadow:0 0 0 1.5px var(--anatomy-mid)}
+.rec-stage .iso-plate-corner{font-size:17px}
+/* 盒子比例 = viewBox 比例，避免居中留白把图缩没 */
+/* 盒子比例 = viewBox 比例（拆解版是正方形 620×620：上方留 168 单位给零件飞出去） */
+.rec-stage .iso-svg,.rec-stage svg{width:100%;max-width:820px;height:auto;aspect-ratio:1 / 1;margin:0 auto}
+/* 跟随零件的标注：位置由脚本每帧按包围盒换算，抬起时才淡入 */
+/* 标注固定在左右两栏（工程图的引线标注），位置不随零件移动，避免互相压住 */
+.rec-tag{position:absolute;transform:translateY(-50%);opacity:0;pointer-events:none;transition:opacity .2s linear}
+.rec-tag[data-side="left"]{left:14%}
+.rec-tag[data-side="right"]{right:14%}
+.rec-tag[data-lane="0"]{top:16%}
+.rec-tag[data-lane="1"]{top:31%}
+.rec-tag[data-lane="2"]{top:46%}
+.rec-tag-text{display:inline-block;white-space:nowrap;padding:8px 16px;border:1.5px solid var(--anatomy-strong);border-radius:3px;
+  background:var(--anatomy-page);color:var(--anatomy-strong);font-family:var(--anatomy-mono);font-size:22px;letter-spacing:.3px}
+.rec-leaders path{fill:none;stroke:var(--anatomy-mid);stroke-width:1.6}
+.rec-leaders circle{fill:var(--anatomy-strong)}
+.rec-caption{grid-column:1 / -1;padding:20px 110px 52px;text-align:center;border-top:1.5px solid var(--anatomy-faint)}
+.rec-caption span{display:inline-block;font-size:44px;line-height:1.44;color:var(--anatomy-strong);max-width:1620px;font-weight:500}
+.rec-progress{position:absolute;left:0;right:0;bottom:0;height:6px;background:var(--anatomy-faint)}
+.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-strong);opacity:.45}
+` : "";
+
+/* 正文样式（build 时插进页面里的第二个 <style>，只有正文页用到） */
 const PAGE_CSS = `
 body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif}
 .iso-page{width:min(760px,100% - 32px)}
@@ -751,64 +944,6 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Hiragino S
   .iso-article th,.iso-article td{padding:7px 6px}
 }
 `;
-
-
-const RECORD_CSS = RECORD ? `
-/* ── 录制版：1920×1080 演播布局 ────────────────────────────────────────
-   为什么这样排：
-   1. 深色主题缩到手机宽度时等距图只剩线条（灰度 2/255），所以录制版固定用项目自带的浅色主题，
-      并把墨色再加深两档、字号按「缩到 1/3 仍可读」来定；
-   2. 图的 SVG 比例是 620×452 ≈ 1.37，舞台盒子必须贴合这个比例，
-      否则 xMidYMid 居中会在左右各留一大块空白（上一版就是这么糊掉的）；
-   3. 左栏放标题 + 大号数据读数 + 要点，右栏放图，底部整条字幕。 */
-body>.iso-page{margin:0;width:1920px;max-width:none;height:1080px;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:760px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page);
-  --anatomy-text:#3f3f43;--anatomy-strong:#111113;--anatomy-hi:#1b1b1e;
-  --anatomy-mid:#5b5b60;--anatomy-lo:#8c8c91;--anatomy-faint:#c6c6c9;
-  --anatomy-shade-0:#eaeae7;--anatomy-shade-1:#e5e5e2;--anatomy-shade-2:#dfdfdc;--anatomy-shade-3:#d9d9d6;
-  --anatomy-paper:#f8f8f5;--anatomy-face:#f2f2ef;--anatomy-top:#ffffff;
-  --anatomy-lit-top:#ffffff;--anatomy-lit-shade:#f5f5f2}
-body>.iso-page>.iso-page.rec{display:contents}
-.rec-left{position:relative;padding:84px 44px 76px 76px;border-right:1.5px solid var(--anatomy-faint)}
-.rec-kicker{font-family:var(--anatomy-mono);font-size:19px;letter-spacing:.28em;color:var(--anatomy-muted);margin:0 0 18px}
-.rec-kicker b{color:var(--anatomy-text);font-weight:400}
-.rec-title{font-size:50px;line-height:1.24;color:var(--anatomy-strong);margin:0 0 30px;font-weight:600;letter-spacing:.5px}
-.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:18px}
-.rec-points li{position:relative;padding-left:26px;font-size:25px;line-height:1.62;color:var(--anatomy-text)}
-.rec-points li::before{content:"";position:absolute;left:0;top:19px;width:14px;height:2px;background:var(--anatomy-mid)}
-.rec-points b{color:var(--anatomy-strong);font-weight:600}
-.rec-metric{position:absolute;left:76px;right:44px;bottom:52px;padding-top:22px;border-top:1.5px solid var(--anatomy-faint);
-  font-family:var(--anatomy-mono);font-size:32px;line-height:1.35;color:var(--anatomy-strong);
-  font-variant-numeric:tabular-nums;letter-spacing:.2px}
-.rec-stage{display:flex;align-items:center;justify-content:center;padding:34px 54px 26px 44px}
-.rec-stage .iso-figure{margin:0;width:100%}
-.rec-stage .iso-plate{padding:26px 28px;box-shadow:0 0 0 1.5px var(--anatomy-mid)}
-.rec-stage .iso-plate-corner{font-size:17px}
-/* 盒子比例 = viewBox 比例，避免居中留白把图缩没 */
-.rec-stage .iso-svg,.rec-stage svg{width:100%;max-width:1006px;height:auto;aspect-ratio:620 / 452;margin:0 auto}
-.rec-caption{grid-column:1 / -1;padding:20px 110px 52px;text-align:center;border-top:1.5px solid var(--anatomy-faint)}
-.rec-caption span{display:inline-block;font-size:44px;line-height:1.44;color:var(--anatomy-strong);max-width:1620px;font-weight:500}
-.rec-progress{position:absolute;left:0;right:0;bottom:0;height:6px;background:var(--anatomy-faint)}
-.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-strong);opacity:.45}
-` : "";
-const DEFAULT_METRIC = `腰围 ${waistCm(FAT0).toFixed(1)} cm · 皮褶 ${skinfoldMm(FAT0).toFixed(1)} mm · 竖脊肌 ${erectorCm(MUS0).toFixed(1)} cm`;
-const recShell = (stage) => `
-<main class="iso-page rec">
-  <section class="rec-left">
-    <p class="rec-kicker">ANATOMY · 图 1 · <b>薄肌测试台</b></p>
-    <h2 class="rec-title" data-rec-title>${REC_SCENES[0].title}</h2>
-    <ul class="rec-points" data-rec-points>${REC_SCENES[0].points.map((point) => `<li>${point}</li>`).join("")}</ul>
-    <div class="rec-metric" data-readout>${DEFAULT_METRIC}</div>
-  </section>
-  <section class="rec-stage">
-    <figure class="iso-figure"><div class="iso-plate">
-      <div class="iso-plate-corners" aria-hidden="true"><span class="iso-plate-corner" data-corner="fig">图 1</span><span class="iso-plate-corner" data-corner="title">薄肌测试台</span></div>
-      ${stage}
-    </div></figure>
-  </section>
-  <div class="rec-caption"><span data-rec-caption>${REC_SCENES[0].caption}</span></div>
-  <div class="rec-progress"><i data-rec-progress></i></div>
-</main>`;
 
 const head = `
 <style>${PAGE_CSS}</style>
@@ -873,7 +1008,11 @@ const rest = `
 </footer>
 `;
 
-const stageHtml = `<div class="iso-stage" tabindex="0" role="slider" aria-label="薄肌测试台：左右方向键改皮褶厚度，上下方向键改肌肉高度" aria-valuemin="${FAT_MIN}" aria-valuemax="${FAT_MAX}"><span data-gaze aria-hidden="true" style="display:none"></span>${svg}</div>`;
+/* 录制版把 viewBox 抬成正方形并留出上方 168 单位的空间：零件要沿 +z 从原位里「飞」出去，
+   不留净空就会被 SVG 边缘裁掉（SVG 默认 overflow:hidden）。 */
+const REC_HEADROOM = 168;
+const stageSvg = RECORD ? svg.replace(`viewBox="0 0 ${W} ${H}"`, `viewBox="0 -${REC_HEADROOM} ${W} ${H + REC_HEADROOM}"`) : svg;
+const stageHtml = `<div class="iso-stage" tabindex="0" role="slider" aria-label="薄肌测试台：左右方向键改皮褶厚度，上下方向键改肌肉高度" aria-valuemin="${FAT_MIN}" aria-valuemax="${FAT_MAX}"><span data-gaze aria-hidden="true" style="display:none"></span>${stageSvg}</div>`;
 const figure = RECORD ? recShell(stageHtml) : k.plateHtml({
   fig: "图 1",
   title: "薄肌测试台",
@@ -897,6 +1036,7 @@ const latheScript = `const G = (() => {${latheSource}\nreturn { viewOf, scaleOf,
 const REC_TAIL = RECORD
   ? recTail.replace("__DURATION__", String(REC_DURATION)).replace("__SIGNAL__", String(REC_SIGNAL))
       .replace("__KEYS__", JSON.stringify(REC_KEYS)).replace("__SCENES__", JSON.stringify(REC_SCENES))
+      .replace("__LIFTS__", JSON.stringify(REC_LIFTS)).replace("__PARTS__", JSON.stringify(REC_PARTS))
   : "";
 const html = k.pageHtml({
   title: RECORD ? "薄肌测试台 · 演示视频" : "薄肌：为什么有人看着瘦，力量却一点不小",
@@ -905,7 +1045,7 @@ const html = k.pageHtml({
   script: kitScript() + latheScript + live + REC_TAIL,
   width: RECORD ? 1920 : 760,
 }).replace('<html lang="en">', '<html lang="zh-CN">')
-  .replace("<style>", `<style>${RECORD_CSS}</style><style>`);
+  .replace("<style>", RECORD ? `<style>${RECORD_CSS}</style><style>` : "<style>");
 
 if (RECORD) {
   mkdirSync(join(HERE, "video"), { recursive: true });

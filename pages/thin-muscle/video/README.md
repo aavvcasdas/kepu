@@ -9,10 +9,10 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `thin-muscle-demo.mp4` | **最终成片**，1920×1080 / H.264 High / yuv420p / 30 fps / 26.00 s / 静音（页面自带字幕行） |
+| `thin-muscle-demo.mp4` | **最终成片（拆解演示）**，1920×1080 / H.264 High / yuv420p / 30 fps / 27.5 s / 静音（页面自带字幕行） |
 | `thin-muscle-demo.webm` | skill 录制器（`scripts/web_recorder.py`）的原始产出，VP9 / 1920×1080 / 25 fps |
 | `thin-muscle-record.html` | 录制版页面（`node build.mjs --record` 生成），固定浅色 + 演播布局，按 25.5 s 时间轴自播 |
-| `captions.srt` | 5 条字幕，剪映字幕轨的素材（页面自播与 SRT 共用同一份时间轴） |
+| `captions.srt` | 7 条字幕，剪映字幕轨的素材（页面自播与 SRT 共用同一份时间轴） |
 | `jianying-draft.zip` | skill 生成的剪映专业版草稿：视频轨 `WebVfxTrack`（1 段 × 25.5 s）+ 字幕轨 `Subtitles`（5 段），画布 1920×1080 |
 
 在 GitHub 上看成片：直接打开
