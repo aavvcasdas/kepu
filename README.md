@@ -22,9 +22,10 @@
 | 薄肌测试台 · 25.97 s | [`thin-muscle-demo.mp4`](pages/thin-muscle/video/thin-muscle-demo.mp4) | [`jianying-draft.zip`](pages/thin-muscle/video/jianying-draft.zip) | [`captions.srt`](pages/thin-muscle/video/captions.srt) |
 | 下一个词试验台 · 26.20 s | [`llm-next-token-demo.mp4`](pages/llm-next-token/video/llm-next-token-demo.mp4) | [`jianying-draft.zip`](pages/llm-next-token/video/jianying-draft.zip) | [`captions.srt`](pages/llm-next-token/video/captions.srt) |
 
-录制版页面（`node build.mjs --record` 生成，不入正文）按固定时间轴自播，播完用
-`window.animationFinished` 给 skill 的 `scripts/web_recorder.py` 发信号收尾；
-草稿里是「视频轨 + 字幕轨」，画布 1920×1080。
+录制版页面（`node build.mjs --record` 生成，不入正文）固定用浅色主题 + 演播布局
+（深色主题缩到播放器尺寸时只剩线条，等于黑屏，实测整帧灰度只有 2/255），
+按固定时间轴自播，播完用 `window.animationFinished` 给 skill 的 `scripts/web_recorder.py`
+发信号收尾；草稿里是「视频轨 + 字幕轨」，画布 1920×1080。
 做法、时间轴与复现命令见
 [`pages/thin-muscle/video/README.md`](pages/thin-muscle/video/README.md)
 与 [`pages/llm-next-token/video/README.md`](pages/llm-next-token/video/README.md)。

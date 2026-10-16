@@ -9,14 +9,28 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `thin-muscle-demo.mp4` | **最终成片**，1920×1080 / H.264 High / yuv420p / 30 fps / 25.97 s / 静音（页面自带字幕行） |
+| `thin-muscle-demo.mp4` | **最终成片**，1920×1080 / H.264 High / yuv420p / 30 fps / 26.00 s / 静音（页面自带字幕行） |
 | `thin-muscle-demo.webm` | skill 录制器（`scripts/web_recorder.py`）的原始产出，VP9 / 1920×1080 / 25 fps |
+| `thin-muscle-record.html` | 录制版页面（`node build.mjs --record` 生成），固定浅色 + 演播布局，按 25.5 s 时间轴自播 |
 | `captions.srt` | 5 条字幕，剪映字幕轨的素材（页面自播与 SRT 共用同一份时间轴） |
 | `jianying-draft.zip` | skill 生成的剪映专业版草稿：视频轨 `WebVfxTrack`（1 段 × 25.5 s）+ 字幕轨 `Subtitles`（5 段），画布 1920×1080 |
 
 在 GitHub 上看成片：直接打开
 [`thin-muscle-demo.mp4`](https://github.com/aavvcasdas/kepu/blob/arena/d6bc678d-kepu/pages/thin-muscle/video/thin-muscle-demo.mp4)
 （GitHub 会用它自带的播放器直接播）。
+
+## 为什么是浅色、为什么这样排
+
+第一版把深色主题原样录了进去，结果视频在播放器里缩到 1/3 宽时，等距图只剩黑底上一层
+`#3e3e3e` 的线（整帧灰度均值只有 **2/255**），看上去就是「黑屏 + 白字」。所以录制版：
+
+1. **固定用项目自带的浅色主题**（`--record` 强制 `light`），并把墨色再加深两档、
+   背景保持 `#f2f2ef`：整帧灰度均值 254/255，缩略图里图形和字都还在；
+2. **舞台盒子贴合 SVG 的 `viewBox` 比例**（620×452 ≈ 1.37）。图的 `preserveAspectRatio`
+   是 `xMidYMid meet`，盒子比例不对就会左右各留一大块空白、把图挤小——这一版按比例给盒子，
+   图实际占满右栏；
+3. **字号按「缩到 1/3 仍可读」定**：标题 50px、要点 25px、数据行 32px、字幕 44px，
+   大号数据读数（皮褶 / 腰围 / 竖脊肌）录进画面，和正文的读数一样来自同一个模型。
 
 ## 链接是怎么搭起来的
 

@@ -16,7 +16,7 @@ import * as A from "../../anatomy/kit/audit.mjs";
 import { kitScript } from "../../anatomy/scripts/inline-kit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const THEME = process.argv.includes("--light") ? "light" : "dark";
+const THEME = (process.argv.includes("--light") || process.argv.includes("--record")) ? "light" : "dark";
 const RECORD = process.argv.includes("--record");   // 录制版：1920×1080 演播布局 + 自动时间轴
 
 const W = 620;
@@ -395,6 +395,16 @@ function recFrame(now) {
   temp = tempT = recValue(REC_CLOCK.keys.temp, t);
   keep = keepT = recValue(REC_CLOCK.keys.keep, t);
   draw();
+  // 视频用的数据条：第一行放抽签结果，第二行放两个旋钮的状态（与正文同一份模型算出来）
+  const recKeep = Math.max(D.K_MIN, Math.min(D.K_MAX, Math.round(keep)));
+  const recKept = probAt(temp, recKeep).kept;
+  const recPick = sampledIndex(temp, recKeep);
+  const recSquares = recKept.reduce((sum, value) => sum + value * value, 0) || 1;
+  if (readout) {
+    const text = "抽到「" + D.WORDS[recPick] + "」 p=" + Math.round(recKept[recPick] * 100) + "%"
+      + "\\n温度 " + temp.toFixed(1) + " · top-k " + recKeep + " · 有效候选 " + (1 / recSquares).toFixed(1);
+    if (readout.textContent !== text) readout.textContent = text;
+  }
   const scene = REC_CLOCK.scenes.find((item) => t >= item.from && t < item.to) || REC_CLOCK.scenes[REC_CLOCK.scenes.length - 1];
   if (scene !== recScene) {
     recScene = scene;
@@ -628,37 +638,50 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Hiragino S
 
 
 const RECORD_CSS = RECORD ? `
-/* ── 录制版：1920×1080 演播布局（左侧知识栏 + 右侧主舞台 + 底部字幕） ── */
+/* ── 录制版：1920×1080 演播布局 ────────────────────────────────────────
+   为什么这样排：
+   1. 深色主题缩到手机宽度时等距图只剩线条（灰度 2/255），所以录制版固定用项目自带的浅色主题，
+      并把墨色再加深两档、字号按「缩到 1/3 仍可读」来定；
+   2. 图的 SVG 比例是 620×452 ≈ 1.37，舞台盒子必须贴合这个比例，
+      否则 xMidYMid 居中会在左右各留一大块空白（上一版就是这么糊掉的）；
+   3. 左栏放标题 + 大号数据读数 + 要点，右栏放图，底部整条字幕。 */
 body>.iso-page{margin:0;width:1920px;max-width:none;height:1080px;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:660px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page)}
+  display:grid;grid-template-columns:760px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page);
+  --anatomy-text:#3f3f43;--anatomy-strong:#111113;--anatomy-hi:#1b1b1e;
+  --anatomy-mid:#5b5b60;--anatomy-lo:#8c8c91;--anatomy-faint:#c6c6c9;
+  --anatomy-shade-0:#eaeae7;--anatomy-shade-1:#e5e5e2;--anatomy-shade-2:#dfdfdc;--anatomy-shade-3:#d9d9d6;
+  --anatomy-paper:#f8f8f5;--anatomy-face:#f2f2ef;--anatomy-top:#ffffff;
+  --anatomy-lit-top:#ffffff;--anatomy-lit-shade:#f5f5f2}
 body>.iso-page>.iso-page.rec{display:contents}
-.rec-left{position:relative;padding:92px 56px 132px 80px;border-right:1px solid var(--anatomy-faint)}
-.rec-kicker{font-family:var(--anatomy-mono);font-size:15px;letter-spacing:.22em;color:var(--anatomy-muted);margin:0 0 24px}
+.rec-left{position:relative;padding:84px 44px 76px 76px;border-right:1.5px solid var(--anatomy-faint)}
+.rec-kicker{font-family:var(--anatomy-mono);font-size:19px;letter-spacing:.28em;color:var(--anatomy-muted);margin:0 0 18px}
 .rec-kicker b{color:var(--anatomy-text);font-weight:400}
-.rec-title{font-size:44px;line-height:1.32;color:var(--anatomy-strong);margin:0 0 32px;font-weight:600;letter-spacing:.5px}
-.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:20px}
-.rec-points li{position:relative;padding-left:28px;font-size:22px;line-height:1.7;color:var(--anatomy-text)}
-.rec-points li::before{content:"";position:absolute;left:0;top:17px;width:12px;height:1.5px;background:var(--anatomy-lo)}
+.rec-title{font-size:50px;line-height:1.24;color:var(--anatomy-strong);margin:0 0 30px;font-weight:600;letter-spacing:.5px}
+.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:18px}
+.rec-points li{position:relative;padding-left:26px;font-size:25px;line-height:1.62;color:var(--anatomy-text)}
+.rec-points li::before{content:"";position:absolute;left:0;top:19px;width:14px;height:2px;background:var(--anatomy-mid)}
 .rec-points b{color:var(--anatomy-strong);font-weight:600}
-.rec-readout{position:absolute;left:80px;right:32px;bottom:44px;padding-top:22px;border-top:1px solid var(--anatomy-faint);
-  font-family:var(--anatomy-mono);font-size:22px;white-space:nowrap;color:var(--anatomy-strong);font-variant-numeric:tabular-nums;letter-spacing:.2px}
-.rec-stage{display:flex;align-items:center;justify-content:center;padding:36px 64px 20px 40px}
+.rec-metric{position:absolute;left:76px;right:44px;bottom:52px;padding-top:22px;border-top:1.5px solid var(--anatomy-faint);
+  font-family:var(--anatomy-mono);font-size:32px;line-height:1.45;color:var(--anatomy-strong);
+  font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:pre-line}
+.rec-stage{display:flex;align-items:center;justify-content:center;padding:34px 54px 26px 44px}
 .rec-stage .iso-figure{margin:0;width:100%}
-.rec-stage .iso-plate{padding:34px 22px;box-shadow:0 0 0 1px var(--anatomy-lo)}
-.rec-stage .iso-stage{width:100%}
-.rec-stage svg{width:100%;height:800px}
-.rec-caption{grid-column:1 / -1;padding:22px 100px 48px;text-align:center}
-.rec-caption span{display:inline-block;font-size:36px;line-height:1.5;color:var(--anatomy-strong);max-width:1600px;font-weight:500}
-.rec-progress{position:absolute;left:0;right:0;bottom:0;height:5px;background:var(--anatomy-faint)}
-.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-lit);opacity:.55}
+.rec-stage .iso-plate{padding:26px 28px;box-shadow:0 0 0 1.5px var(--anatomy-mid)}
+.rec-stage .iso-plate-corner{font-size:17px}
+/* 盒子比例 = viewBox 比例，避免居中留白把图缩没 */
+.rec-stage .iso-svg,.rec-stage svg{width:100%;max-width:1006px;height:auto;aspect-ratio:620 / 452;margin:0 auto}
+.rec-caption{grid-column:1 / -1;padding:20px 110px 52px;text-align:center;border-top:1.5px solid var(--anatomy-faint)}
+.rec-caption span{display:inline-block;font-size:44px;line-height:1.44;color:var(--anatomy-strong);max-width:1620px;font-weight:500}
+.rec-progress{position:absolute;left:0;right:0;bottom:0;height:6px;background:var(--anatomy-faint)}
+.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-strong);opacity:.45}
 ` : "";
 const recShell = (stage) => `
 <main class="iso-page rec">
   <section class="rec-left">
-    <p class="rec-kicker">ANATOMY · 图 2 <b>下一个词试验台</b></p>
+    <p class="rec-kicker">ANATOMY · 图 2 · <b>下一个词试验台</b></p>
     <h2 class="rec-title" data-rec-title>${REC_SCENES[0].title}</h2>
     <ul class="rec-points" data-rec-points>${REC_SCENES[0].points.map((point) => `<li>${point}</li>`).join("")}</ul>
-    <div class="rec-readout" data-readout>${DEFAULT_READOUT}</div>
+    <div class="rec-metric" data-readout>${DEFAULT_READOUT}</div>
   </section>
   <section class="rec-stage">
     <figure class="iso-figure"><div class="iso-plate">
@@ -788,7 +811,7 @@ if (RECORD) {
   console.log("wrote video/captions.srt", REC_SCENES.length, "条字幕");
 }
 const file = RECORD
-  ? (THEME === "light" ? "llm-next-token-record-light.html" : "llm-next-token-record.html")
+  ? "llm-next-token-record.html"                      // 录制版只有一个文件：固定浅色 + 演播布局
   : (THEME === "light" ? "llm-next-token-light.html" : "llm-next-token.html");
 writeFileSync(join(HERE, file), html);
 A.auditOrExit(R, P, {});

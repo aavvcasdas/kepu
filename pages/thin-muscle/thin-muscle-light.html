@@ -2154,7 +2154,7 @@ function draw() {
   knobs[0].innerHTML = knobPointer(D.KNOBS[0], (fat - D.FAT_MIN) / (D.FAT_MAX - D.FAT_MIN));
   knobs[1].innerHTML = knobPointer(D.KNOBS[1], mus);
   const text = "腰围 " + waistCm(fat).toFixed(1) + " cm · 皮褶 " + skinfoldMm(fat).toFixed(1) + " mm · 竖脊肌 " + (h / 10).toFixed(1) + " cm";
-  if (readout.textContent !== text) readout.textContent = text;
+  if (readout && readout.textContent !== text) readout.textContent = text;
   if (gaze) gaze.textContent = "皮褶 " + skinfoldMm(fat).toFixed(1) + " 毫米：脂肪层薄下去的每一毫米，腰围就少 6.3 毫米";
   stage.setAttribute("aria-valuetext", text);
 }

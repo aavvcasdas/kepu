@@ -10,8 +10,9 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `llm-next-token-demo.mp4` | **最终成片**，1920×1080 / H.264 High / yuv420p / 30 fps / 26.20 s / 静音（页面自带字幕行） |
+| `llm-next-token-demo.mp4` | **最终成片**，1920×1080 / H.264 High / yuv420p / 30 fps / 26.17 s / 静音（页面自带字幕行） |
 | `llm-next-token-demo.webm` | skill 录制器（`scripts/web_recorder.py`）的原始产出，VP9 / 1920×1080 / 25 fps |
+| `llm-next-token-record.html` | 录制版页面（`node build.mjs --record` 生成），固定浅色 + 演播布局，按 26 s 时间轴自播 |
 | `captions.srt` | 5 条字幕，剪映字幕轨的素材 |
 | `jianying-draft.zip` | 剪映草稿：视频轨 `WebVfxTrack` + 字幕轨 `Subtitles`（5 段），画布 1920×1080 |
 
@@ -26,6 +27,10 @@
 | 3 | 11–16.5 s | top-k：先砍掉长尾 | 1.9 | 9 → 2 → 9 | 温度 1.9 + k=2 →「吧」p=42% |
 | 4 | 16.5–21.8 s | 同一个问题，两次可以不同 | 1.9 → 0.4 → 1.9 | 9 → 6 | 被抽中的那根柱子点着 |
 | 5 | 21.8–26 s | 没有意图，只有加权求和与抽样 | 1.9 → 0.9 | 6 → 4 → 6 | 回到静止状态 |
+
+录制版同样固定用浅色主题（理由见 [`../../thin-muscle/video/README.md`](../../thin-muscle/video/README.md)：
+深色那版缩到 1/3 宽时整帧灰度只有 2/255，等于黑屏）。数据条排两行：
+第一行是抽签结果，第二行是温度 / top-k / 有效候选。
 
 读数全部来自页面里那份模型（`probAt(T, keep)` / `sampledIndex`），所以视频里的数字与正文、
 与你自己拧旋钮看到的完全一致：温度 1.9、top-k 2 时抽到「吧」的概率就是 42%。
