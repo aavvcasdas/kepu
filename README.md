@@ -15,15 +15,19 @@
 ## 视频版
 
 用 [jianying-editor-skill](https://github.com/luoluoluo22/jianying-editor-skill) 的
-「网页动效转视频」路径，把页面动作录成 1920×1080 视频素材，并生成剪映草稿：
+「网页动效转视频 / Web-to-Video」路径，把页面动作录成 1920×1080 视频素材，并生成剪映草稿：
 
-| 成片 | 视频 | 剪映草稿 | 字幕 |
+| 成片 | 视频（点开直接播） | 剪映草稿 | 字幕 |
 | --- | --- | --- | --- |
-| 薄肌测试台 · 25.97 s | [`pages/thin-muscle/video/thin-muscle-demo.mp4`](pages/thin-muscle/video/thin-muscle-demo.mp4) | [`jianying-draft.zip`](pages/thin-muscle/video/jianying-draft.zip) | [`captions.srt`](pages/thin-muscle/video/captions.srt) |
+| 薄肌测试台 · 25.97 s | [`thin-muscle-demo.mp4`](pages/thin-muscle/video/thin-muscle-demo.mp4) | [`jianying-draft.zip`](pages/thin-muscle/video/jianying-draft.zip) | [`captions.srt`](pages/thin-muscle/video/captions.srt) |
+| 下一个词试验台 · 26.20 s | [`llm-next-token-demo.mp4`](pages/llm-next-token/video/llm-next-token-demo.mp4) | [`jianying-draft.zip`](pages/llm-next-token/video/jianying-draft.zip) | [`captions.srt`](pages/llm-next-token/video/captions.srt) |
 
-录制版页面（`node build.mjs --record` 生成）按固定时间轴自播，播完用
-`window.animationFinished` 给 skill 的 `scripts/web_recorder.py` 发信号收尾。
-做法与复现命令见 [`pages/thin-muscle/video/README.md`](pages/thin-muscle/video/README.md)。
+录制版页面（`node build.mjs --record` 生成，不入正文）按固定时间轴自播，播完用
+`window.animationFinished` 给 skill 的 `scripts/web_recorder.py` 发信号收尾；
+草稿里是「视频轨 + 字幕轨」，画布 1920×1080。
+做法、时间轴与复现命令见
+[`pages/thin-muscle/video/README.md`](pages/thin-muscle/video/README.md)
+与 [`pages/llm-next-token/video/README.md`](pages/llm-next-token/video/README.md)。
 
 ## 重新构建
 

@@ -7,7 +7,7 @@
 //       背后的格板 10% 一道横线，被抽中的那根点着，被砍掉的候选落进旁边的废料盘。
 // 尺度：1 世界单位 = 1 毫米。
 // node build.mjs [--light] [--audit]
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as k from "../../anatomy/kit/iso-kit.mjs";
@@ -17,6 +17,7 @@ import { kitScript } from "../../anatomy/scripts/inline-kit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const THEME = process.argv.includes("--light") ? "light" : "dark";
+const RECORD = process.argv.includes("--record");   // 录制版：1920×1080 演播布局 + 自动时间轴
 
 const W = 620;
 const H = 452;
@@ -365,6 +366,52 @@ const svg = k.figureSvg({
   body: [...back, ...layer],
 });
 
+/* ── 录制尾脚本模板（build 期注入时间轴） ──────────────────────── */
+const recTail = `
+/* ── 录制模式：按固定时间轴自播，播完给 web_recorder 发 animationFinished ── */
+const REC_CLOCK = { duration: __DURATION__, signal: __SIGNAL__, keys: __KEYS__, scenes: __SCENES__ };
+const recEase = (u) => u * u * (3 - 2 * u);
+function recValue(series, t) {
+  if (t <= series[0][0]) return series[0][1];
+  for (let index = 1; index < series.length; index++) {
+    const [t0, v0] = series[index - 1];
+    const [t1, v1] = series[index];
+    if (t <= t1) {
+      const span = t1 - t0 || 1;
+      return v0 + (v1 - v0) * recEase(Math.max(0, Math.min(1, (t - t0) / span)));
+    }
+  }
+  return series[series.length - 1][1];
+}
+const recTitle = document.querySelector("[data-rec-title]");
+const recPoints = document.querySelector("[data-rec-points]");
+const recCaption = document.querySelector("[data-rec-caption]");
+const recProgress = document.querySelector("[data-rec-progress]");
+let recScene = null, recStart = 0, recSignalled = false;
+function recFrame(now) {
+  if (!recStart) recStart = now;
+  const t = (now - recStart) / 1000;
+  touring = false;
+  temp = tempT = recValue(REC_CLOCK.keys.temp, t);
+  keep = keepT = recValue(REC_CLOCK.keys.keep, t);
+  draw();
+  const scene = REC_CLOCK.scenes.find((item) => t >= item.from && t < item.to) || REC_CLOCK.scenes[REC_CLOCK.scenes.length - 1];
+  if (scene !== recScene) {
+    recScene = scene;
+    recTitle.textContent = scene.title;
+    recPoints.innerHTML = scene.points.map((point) => "<li>" + point + "</li>").join("");
+    recCaption.textContent = scene.caption;
+  }
+  if (recProgress) recProgress.style.width = Math.min(100, (t / REC_CLOCK.duration) * 100).toFixed(2) + "%";
+  if (!recSignalled && t >= REC_CLOCK.signal) { recSignalled = true; window.animationFinished = true; }
+  if (t >= REC_CLOCK.duration) { if (recProgress) recProgress.style.width = "100%"; return; }
+  requestAnimationFrame(recFrame);
+}
+visible = false;
+if (frame) { cancelAnimationFrame(frame); frame = 0; }
+requestAnimationFrame(recFrame);
+`;
+
 /* ── 页面里的模型（与 build 同一份公式） ─────────────────────────── */
 const DATA = {
   P, LOGITS, WORDS, SEED, T0, K0, T_MIN, T_MAX, K_MIN, K_MAX,
@@ -428,6 +475,7 @@ const barsHost = svg.querySelector('[data-part="bars"]');
 const markerHost = svg.querySelector('[data-part="marker"]');
 const knobs = D.KNOBS.map((_, index) => svg.querySelector('[data-part="knob-' + index + '"]'));
 const still = matchMedia("(prefers-reduced-motion: reduce)");
+const REC = ${RECORD};   // 录制版：不巡演、不接管指针，交给时间轴
 let temp = D.T0, keep = D.K0, tempT = D.T0, keepT = D.K0;
 
 function draw() {
@@ -472,11 +520,11 @@ const steer = (t, m) => {
   idle = setTimeout(() => { touring = !still.matches; clock = 0; run(); }, 4000);
   run();
 };
-new IntersectionObserver((entries) => {
+if (!REC) new IntersectionObserver((entries) => {
   visible = entries[entries.length - 1].isIntersecting;
   if (visible) run();
 }, { rootMargin: "120px 0px" }).observe(stage);
-if (still.matches) touring = false;
+if (still.matches || REC) touring = false;
 stage.addEventListener("pointermove", (event) => {
   const box = svg.getBoundingClientRect();
   const fx = clamp((event.clientX - box.left) / box.width, 0, 1);
@@ -496,6 +544,52 @@ stage.addEventListener("keydown", (event) => {
 });
 draw();
 `;
+
+
+/* ── 录制时间轴：页面自播与 SRT 共用同一份数据 ─────────────────────── */
+const REC_DURATION = 26.0, REC_SIGNAL = 24.8;
+const REC_KEYS = {
+  temp: [[0, 0.9], [4.5, 0.9], [6.0, 0.6], [7.6, 0.6], [9.0, 2.0], [10.6, 2.0], [12.0, 1.9], [16.2, 1.9],
+    [17.0, 0.4], [18.4, 0.4], [19.6, 1.9], [21.4, 1.9], [22.4, 1.0], [REC_DURATION, 0.9]],
+  keep: [[0, 6], [2.6, 9], [4.5, 9], [6.0, 9], [7.6, 9], [9.0, 9], [10.6, 9], [12.0, 2], [13.4, 2],
+    [14.2, 9], [16.2, 9], [17.0, 9], [18.4, 9], [19.6, 6], [21.4, 6], [22.4, 4], [REC_DURATION, 6]],
+};
+const REC_SCENES = [
+  {
+    from: 0, to: 5.5, title: "下一个字，是一张概率表",
+    points: ["模型给每个可能的下一字打分", "过一次 softmax，分数变成概率", "九根柱子 = 九种可能，加起来是 1"],
+    caption: "模型读完上文，给每个可能的下一字打分；分数过一遍 softmax，就成了一张概率表。",
+  },
+  {
+    from: 5.5, to: 11.0, title: "温度：把骰子拧热或拧冷",
+    points: ["低温 0.2：几乎只挑最高分那个", "高温 2.0：候选之间的差距被抹平", "温度不改排序，只改冒险程度"],
+    caption: "温度低时它偏爱最高分，温度高时它更愿意冒险：0.2 几乎不掷骰子，2.0 则接近平均分配。",
+  },
+  {
+    from: 11.0, to: 16.5, title: "top-k：先砍掉长尾",
+    points: ["只在概率最高的 <b>k</b> 个候选里分配", "被砍掉的候选落进右下角的废料盘", "k=2 时，最高分那根柱子会明显变高"],
+    caption: "top-k 等于先把长尾砍掉：只在前 k 个候选里分配概率，剩下的进废料盘。",
+  },
+  {
+    from: 16.5, to: 21.8, title: "同一个问题，两次可以不同",
+    points: ["每生成一个字，都要重新抽一次", "被抽中的柱子点着，就是这次的结果", "温度与 k 一起决定它有多「不安分」"],
+    caption: "同一个问题连着问两次，答案可以不一样——因为每生成一个字，都要重新抽一次。",
+  },
+  {
+    from: 21.8, to: REC_DURATION, title: "没有意图，只有加权求和与抽样",
+    points: ["一层层加权求和，再反复抽样", "看着像思路，其实是语言里本来的搭配", "概率表在这儿，你可以自己拧"],
+    caption: "这里面没有意图：一层层加权求和，再反复抽样。看着像思路，其实是语言里本来的搭配。",
+  },
+];
+const srtTime = (seconds) => {
+  const ms = Math.round(seconds * 1000);
+  const hh = String(Math.floor(ms / 3600000)).padStart(2, "0");
+  const mm = String(Math.floor(ms / 60000) % 60).padStart(2, "0");
+  const ss = String(Math.floor(ms / 1000) % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss},${String(ms % 1000).padStart(3, "0")}`;
+};
+const srtText = REC_SCENES.map((scene, index) => `${index + 1}\n${srtTime(scene.from)} --> ${srtTime(scene.to)}\n${scene.caption.replace(/<[^>]+>/g, "")}\n`).join("\n");
+const DEFAULT_READOUT = `抽到「${WORDS[sampledIndex(T0, K0)]}」 p=${Math.round(probAt(T0, K0).kept[sampledIndex(T0, K0)] * 100)}% · 温度 ${T0.toFixed(1)} · top-k ${K0} · 有效候选 ${(1 / probAt(T0, K0).kept.reduce((s, v) => s + v * v, 0)).toFixed(1)}`;
 
 /* ── 页面 ─────────────────────────────────────────────────────────── */
 const PAGE_CSS = `
@@ -531,6 +625,50 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Hiragino S
   .iso-article th,.iso-article td{padding:7px 6px}
 }
 `;
+
+
+const RECORD_CSS = RECORD ? `
+/* ── 录制版：1920×1080 演播布局（左侧知识栏 + 右侧主舞台 + 底部字幕） ── */
+body>.iso-page{margin:0;width:1920px;max-width:none;height:1080px;overflow:hidden;position:relative;
+  display:grid;grid-template-columns:660px 1fr;grid-template-rows:1fr auto;background:var(--anatomy-page)}
+body>.iso-page>.iso-page.rec{display:contents}
+.rec-left{position:relative;padding:92px 56px 132px 80px;border-right:1px solid var(--anatomy-faint)}
+.rec-kicker{font-family:var(--anatomy-mono);font-size:15px;letter-spacing:.22em;color:var(--anatomy-muted);margin:0 0 24px}
+.rec-kicker b{color:var(--anatomy-text);font-weight:400}
+.rec-title{font-size:44px;line-height:1.32;color:var(--anatomy-strong);margin:0 0 32px;font-weight:600;letter-spacing:.5px}
+.rec-points{margin:0;padding:0;list-style:none;display:grid;gap:20px}
+.rec-points li{position:relative;padding-left:28px;font-size:22px;line-height:1.7;color:var(--anatomy-text)}
+.rec-points li::before{content:"";position:absolute;left:0;top:17px;width:12px;height:1.5px;background:var(--anatomy-lo)}
+.rec-points b{color:var(--anatomy-strong);font-weight:600}
+.rec-readout{position:absolute;left:80px;right:32px;bottom:44px;padding-top:22px;border-top:1px solid var(--anatomy-faint);
+  font-family:var(--anatomy-mono);font-size:22px;white-space:nowrap;color:var(--anatomy-strong);font-variant-numeric:tabular-nums;letter-spacing:.2px}
+.rec-stage{display:flex;align-items:center;justify-content:center;padding:36px 64px 20px 40px}
+.rec-stage .iso-figure{margin:0;width:100%}
+.rec-stage .iso-plate{padding:34px 22px;box-shadow:0 0 0 1px var(--anatomy-lo)}
+.rec-stage .iso-stage{width:100%}
+.rec-stage svg{width:100%;height:800px}
+.rec-caption{grid-column:1 / -1;padding:22px 100px 48px;text-align:center}
+.rec-caption span{display:inline-block;font-size:36px;line-height:1.5;color:var(--anatomy-strong);max-width:1600px;font-weight:500}
+.rec-progress{position:absolute;left:0;right:0;bottom:0;height:5px;background:var(--anatomy-faint)}
+.rec-progress i{display:block;height:100%;width:0;background:var(--anatomy-lit);opacity:.55}
+` : "";
+const recShell = (stage) => `
+<main class="iso-page rec">
+  <section class="rec-left">
+    <p class="rec-kicker">ANATOMY · 图 2 <b>下一个词试验台</b></p>
+    <h2 class="rec-title" data-rec-title>${REC_SCENES[0].title}</h2>
+    <ul class="rec-points" data-rec-points>${REC_SCENES[0].points.map((point) => `<li>${point}</li>`).join("")}</ul>
+    <div class="rec-readout" data-readout>${DEFAULT_READOUT}</div>
+  </section>
+  <section class="rec-stage">
+    <figure class="iso-figure"><div class="iso-plate">
+      <div class="iso-plate-corners" aria-hidden="true"><span class="iso-plate-corner" data-corner="fig">图 2</span><span class="iso-plate-corner" data-corner="title">下一个词试验台</span></div>
+      ${stage}
+    </div></figure>
+  </section>
+  <div class="rec-caption"><span data-rec-caption>${REC_SCENES[0].caption}</span></div>
+  <div class="rec-progress"><i data-rec-progress></i></div>
+</main>`;
 
 const head = `
 <style>${PAGE_CSS}</style>
@@ -610,7 +748,8 @@ const rest = `
   <p>文中对注意力、温度、top-k、scaling law 的描述是概念层面的简化：真实的模型还有位置编码、残差与归一化、多轮训练与对齐（RLHF/DPO）等环节，词块切分与概率数值也随模型而异。这里的目标是给出一个能自己动手验证的心智模型，不是复现任何一篇论文。</p>
 `;
 
-const figure = k.plateHtml({
+const stageHtml = `<div class="iso-stage" tabindex="0" role="slider" aria-label="下一个词试验台：左右方向键调温度，上下方向键调 top-k 候选数" aria-valuemin="${T_MIN}" aria-valuemax="${T_MAX}"><span data-gaze aria-hidden="true" style="display:none"></span>${svg}</div>`;
+const figure = RECORD ? recShell(stageHtml) : k.plateHtml({
   fig: "图 2",
   title: "下一个词试验台",
   hint: "鼠标移动或方向键：左右调温度，上下调 top-k 候选数",
@@ -630,15 +769,27 @@ const latheSource = readFileSync(join(HERE, "..", "..", "anatomy", "kit", "lathe
   .replace(/^export /gm, "");
 const latheScript = `const G = (() => {${latheSource}\nreturn { viewOf, scaleOf, frameAlong, frameOf, pointOf, disc, ringBand, sphereOf, prismOf, solidOf, circleOf, arcOf, stepsFor, dot3, add3, sub3, mul3, unit3, cross3, len3, lightOf, toneOf, radialOf };})();\n`;
 
+const REC_TAIL = RECORD
+  ? recTail.replace("__DURATION__", String(REC_DURATION)).replace("__SIGNAL__", String(REC_SIGNAL))
+      .replace("__KEYS__", JSON.stringify(REC_KEYS)).replace("__SCENES__", JSON.stringify(REC_SCENES))
+  : "";
 const html = k.pageHtml({
-  title: "大模型是怎么猜下一个字的",
+  title: RECORD ? "下一个词试验台 · 演示视频" : "大模型是怎么猜下一个字的",
   theme: THEME,
-  body: `${head}${figure}${rest}`,
-  script: kitScript() + latheScript + live,
-  width: 760,
-}).replace('<html lang="en">', '<html lang="zh-CN">');
+  body: RECORD ? figure : `${head}${figure}${rest}`,
+  script: kitScript() + latheScript + live + REC_TAIL,
+  width: RECORD ? 1920 : 760,
+}).replace('<html lang="en">', '<html lang="zh-CN">')
+  .replace("<style>", `<style>${RECORD_CSS}</style><style>`);
 
-const file = THEME === "light" ? "llm-next-token-light.html" : "llm-next-token.html";
+if (RECORD) {
+  mkdirSync(join(HERE, "video"), { recursive: true });
+  writeFileSync(join(HERE, "video", "captions.srt"), srtText);
+  console.log("wrote video/captions.srt", REC_SCENES.length, "条字幕");
+}
+const file = RECORD
+  ? (THEME === "light" ? "llm-next-token-record-light.html" : "llm-next-token-record.html")
+  : (THEME === "light" ? "llm-next-token-light.html" : "llm-next-token.html");
 writeFileSync(join(HERE, file), html);
 A.auditOrExit(R, P, {});
 console.log("wrote", file, `${(html.length / 1024).toFixed(0)} KB`);

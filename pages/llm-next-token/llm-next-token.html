@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>大模型是怎么猜下一个字的</title><style>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>大模型是怎么猜下一个字的</title><style></style><style>
 .iso{
   --anatomy-page:#0b0b0b;--anatomy-card:#131313;--anatomy-text:#a3a3a3;--anatomy-strong:#e6e6e6;--anatomy-muted:#6e6e6e;
   --anatomy-paper:#131313;--anatomy-face:#1b1b1b;--anatomy-top:#1c1c1c;
@@ -2132,6 +2132,7 @@ const barsHost = svg.querySelector('[data-part="bars"]');
 const markerHost = svg.querySelector('[data-part="marker"]');
 const knobs = D.KNOBS.map((_, index) => svg.querySelector('[data-part="knob-' + index + '"]'));
 const still = matchMedia("(prefers-reduced-motion: reduce)");
+const REC = false;   // 录制版：不巡演、不接管指针，交给时间轴
 let temp = D.T0, keep = D.K0, tempT = D.T0, keepT = D.K0;
 
 function draw() {
@@ -2176,11 +2177,11 @@ const steer = (t, m) => {
   idle = setTimeout(() => { touring = !still.matches; clock = 0; run(); }, 4000);
   run();
 };
-new IntersectionObserver((entries) => {
+if (!REC) new IntersectionObserver((entries) => {
   visible = entries[entries.length - 1].isIntersecting;
   if (visible) run();
 }, { rootMargin: "120px 0px" }).observe(stage);
-if (still.matches) touring = false;
+if (still.matches || REC) touring = false;
 stage.addEventListener("pointermove", (event) => {
   const box = svg.getBoundingClientRect();
   const fx = clamp((event.clientX - box.left) / box.width, 0, 1);
